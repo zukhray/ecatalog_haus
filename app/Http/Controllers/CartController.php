@@ -19,6 +19,8 @@ class CartController extends Controller
     {
     $produk = Produk::findOrFail($id);
     $cart = session()->get('cart', []);
+    $sugarOption = $request->input('sugar_option', 'Normal Sugar'); // Default: Normal Sugar
+    $iceOption = $request->input('ice_option', 'Normal Ice');     // Default: Normal Ice
 
     $qtySekarang = isset($cart[$id]) ? $cart[$id]['qty'] : 0;
 
