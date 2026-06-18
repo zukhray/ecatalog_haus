@@ -72,47 +72,90 @@ class PesananController extends Controller
     {
         $ref = Pesanan::findOrFail($id);
         
-        // Cek kalau created_at ada isinya
         if ($ref->created_at) {
             $minTime = Carbon::parse($ref->created_at)->subSeconds(10);
             $maxTime = Carbon::parse($ref->created_at)->addSeconds(10);
-
+    
             $items = Pesanan::where('nama_customer', $ref->nama_customer)
                             ->whereBetween('created_at', [$minTime, $maxTime])
                             ->get();
         } else {
-            // Rencana cadangan: ambil yang ID nya sama persis aja (jadi array biar bisa diloop di PDF)
             $items = Pesanan::where('id', $ref->id)->get();
         }
         
-        $pdf = Pdf::loadView('invoice_pdf', compact('items', 'ref'));
-        return $pdf->download('Invoice-'.$ref->nama_customer.'.pdf');
+        // [BARU] Merge items untuk PDF
+        $mergedItems = [];
+        foreach ($items as $item) {
+            $key = $item->nama_produk . '|' . ($item->catatan ?? '');
+            if (!isset($mergedItems[$key])) {
+                $mergedItems[$key] = [
+                    'nama_produk' => $item->nama_produk,
+                    'catatan' => $item->catatan,
+                    'jumlah' => 0,
+                    'harga' => $item->harga,
+                    'total' => 0
+                ];
+            }
+            $mergedItems[$key]['jumlah'] += $item->jumlah;
+            $mergedItems[$key]['total'] += $item->total;
+        }
+        
+        $pdf = Pdf::loadView('invoice_pdf', compact('items', 'ref', 'mergedItems'));
+        return $pdf->stream('Invoice-' . str_replace(['/', '\\'], '-', $ref->nama_customer) . '.pdf');
     }
 
     public function sukses($id)
     {
-        // Cari data pesanan berdasarkan ID biar bisa nampilin nama customer di setruk
         $ref = \App\Models\Pesanan::findOrFail($id);
         
-        // Ambil semua item dalam 1 struk yang dibeli di waktu yang sama
+        // Ambil semua item dalam 1 struk
         $minTime = \Carbon\Carbon::parse($ref->created_at)->subSeconds(10);
         $maxTime = \Carbon\Carbon::parse($ref->created_at)->addSeconds(10);
-
+    
         $items = \App\Models\Pesanan::where('nama_customer', $ref->nama_customer)
                         ->whereBetween('created_at', [$minTime, $maxTime])
                         ->get();
         
+        // [BARU] Merge item yang sama (nama + catatan/variant)
+        $mergedItems = [];
+        foreach ($items as $item) {
+            $mergeKey = $item->nama_produk . '|' . ($item->catatan ?? '');
+            
+            if (!isset($mergedItems[$mergeKey])) {
+                $mergedItems[$mergeKey] = [
+                    'nama_produk' => $item->nama_produk,
+                    'catatan' => $item->catatan,
+                    'jumlah' => 0,
+                    'harga' => $item->harga,
+                    'total' => 0
+                ];
+            }
+            $mergedItems[$mergeKey]['jumlah'] += $item->jumlah;
+            $mergedItems[$mergeKey]['total'] += $item->total;
+        }
+        
+        // Convert ke collection biar bisa di-loop di blade
+        $mergedItems = collect($mergedItems);
+    
         // Hitung subtotal asli dan total akhir
         $subtotalAsli = 0;
         $totalBayar = 0;
         
-        foreach($items as $item) {
-            $subtotalAsli += ($item->harga * $item->jumlah); // Pakai 'jumlah', bukan 'qty'
-            $totalBayar += $item->total; // Kolom 'total' udah nyimpen harga setelah diskon
+        foreach ($items as $item) {
+            $subtotalAsli += ($item->harga * $item->jumlah);
+            $totalBayar += $item->total;
         }
         
         $totalDiskon = $subtotalAsli - $totalBayar;
-
-        return view('sukses', compact('ref', 'items', 'subtotalAsli', 'totalBayar', 'totalDiskon', 'id'));
+    
+        return view('sukses', compact(
+            'ref', 
+            'items', 
+            'mergedItems',  // [BARU] Kirim merged items
+            'subtotalAsli', 
+            'totalBayar', 
+            'totalDiskon', 
+            'id'
+        ));
     }
 }

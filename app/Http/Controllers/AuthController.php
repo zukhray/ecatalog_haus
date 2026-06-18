@@ -17,8 +17,8 @@ class AuthController extends Controller
         // Validasi PIN Hardcode sesuai tahun perusahaan
         if ($request->kode_akses === '140618') {
             session(['role' => 'sales']);
-            session(['name' => 'Tim Sales']);
-            return redirect('/');
+            session(['nama_user' => 'Tim Sales']); // <-- ganti dari 'name' jadi 'nama_user'
+            return redirect('/')->with('success', 'Login berhasil! Selamat datang, Tim Sales.');
         }
 
         return back()->with('error_sales', 'Kode Akses Salah!');
@@ -27,7 +27,7 @@ class AuthController extends Controller
     public function loginAdmin(Request $request)
     {
         // Asumsi pakai tabel 'users' bawaan Laravel. 
-        // Biar nggak ribet rombak database, kita anggap 'username' itu ngecek ke kolom 'email'.
+        // 'username' di form = kolom 'email' di database
         $credentials = [
             'email' => $request->username, 
             'password' => $request->password
@@ -35,8 +35,8 @@ class AuthController extends Controller
 
         if (Auth::attempt($credentials)) {
             session(['role' => 'admin']);
-            session(['name' => 'Administrator']);
-            return redirect('/');
+            session(['nama_user' => 'Administrator']); // <-- ganti dari 'name' jadi 'nama_user'
+            return redirect('/')->with('success', 'Login berhasil! Selamat datang, Admin.');
         }
 
         return back()->with('error_admin', 'Username atau Password salah!');
@@ -46,6 +46,6 @@ class AuthController extends Controller
     {
         Auth::logout(); // Logout dari auth bawaan (Admin)
         session()->flush(); // Hapus semua session (Sales & Admin)
-        return redirect('/login');
+        return redirect('/login')->with('success', 'Berhasil logout!');
     }
 }

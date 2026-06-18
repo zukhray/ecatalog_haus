@@ -123,4 +123,13 @@ class ProdukController extends Controller
         // 5. Lempar datanya ke halaman compare dengan nama variabel 'produk'
         return view('compare', compact('produk'));
     }
+
+    public function stokKritis()
+{
+    $produkKritis = Produk::where('stok', '<=', 5)
+        ->orderBy('stok', 'asc')
+        ->get();
+    
+    return view('stok_kritis', compact('produkKritis'));
+}
 }

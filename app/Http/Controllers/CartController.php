@@ -11,89 +11,154 @@ class CartController extends Controller
 {
     public function index()
     {
-        return view('keranjang');
+        $cart = session()->get('cart', []);
+        $subtotal = 0;
+        
+        foreach ($cart as $item) {
+            $subtotal += $item['price'] * $item['qty'];
+        }
+        
+        // Hitung diskon
+        $diskon = 0;
+        $voucher = session()->get('voucher');
+        if ($voucher) {
+            if ($voucher['tipe'] == 'potongan') {
+                $diskon = $voucher['nominal'];
+            } else {
+                $diskon = $subtotal * ($voucher['nominal'] / 100);
+            }
+        }
+        
+        $total = max(0, $subtotal - $diskon);
+        
+        return view('keranjang', compact('cart', 'subtotal', 'diskon', 'total'));
     }
 
-    // Ubah bagian atasnya jadi ada Request $request ya bro
     public function add(Request $request, $id)
     {
-    $produk = Produk::findOrFail($id);
-    $cart = session()->get('cart', []);
-    $sugarOption = $request->input('sugar_option', 'Normal Sugar'); // Default: Normal Sugar
-    $iceOption = $request->input('ice_option', 'Normal Ice');     // Default: Normal Ice
+        $produk = Produk::findOrFail($id);
+        $cart = session()->get('cart', []);
 
-    $qtySekarang = isset($cart[$id]) ? $cart[$id]['qty'] : 0;
+        $qtySekarang = isset($cart[$id]) ? $cart[$id]['qty'] : 0;
 
-    if ($qtySekarang >= $produk->stok) {
-        return redirect()->back()->with('error', 'Gagal! Stok tersisa hanya ' . $produk->stok);
-    }
+        if ($qtySekarang >= $produk->stok) {
+            return redirect()->back()->with('error', 'Gagal! Stok tersisa hanya ' . $produk->stok);
+        }
 
-    $hargaFix = $produk->harga - $produk->diskon;
+        $hargaFix = $produk->harga - $produk->diskon;
 
-    if(isset($cart[$id])) {
-        $cart[$id]['qty']++;
-    } else {
-        $cart[$id] = [
-            "name" => $produk->nama_produk,
-            "qty" => 1,
-            "price" => $hargaFix,
-            "foto" => $produk->foto
-        ];
-    }
-    
-    session()->put('cart', $cart);
+        if (isset($cart[$id])) {
+            $cart[$id]['qty']++;
+        } else {
+            $cart[$id] = [
+                "name" => $produk->nama_produk,
+                "qty" => 1,
+                "price" => $hargaFix,
+                "foto" => $produk->foto,
+                // ✅ SIMPAN VARIANT
+                "sugar_option" => $request->sugar_option ?? 'Normal',
+                "ice_option" => $request->ice_option ?? 'Normal',
+                "spicy_option" => $request->spicy_option ?? 'Normal'
+            ];
+        }
+        
+        session()->put('cart', $cart);
 
-    // [LOGIKA BARU] Jika diklik dari halaman compare, langsung lempar ke halaman keranjang
-    if ($request->query('from') == 'compare') {
-        return redirect('/keranjang')->with('success', 'Produk berhasil dipilih!');
-    }
+        if ($request->query('from') == 'compare') {
+            return redirect('/keranjang')->with('success', 'Produk berhasil dipilih!');
+        }
 
-    // Kalau diklik dari katalog biasa, tetap kembali ke halaman sebelumnya
-    return redirect()->back()->with('success', 'Produk berhasil masuk keranjang!');
+        return redirect()->back()->with('success', 'Produk berhasil masuk keranjang!');
     }
 
     public function remove($id)
     {
         $cart = session()->get('cart');
-        if(isset($cart[$id])) {
+        if (isset($cart[$id])) {
             unset($cart[$id]);
             session()->put('cart', $cart);
         }
         return redirect()->back();
     }
 
+    // ✅ CHECKOUT DENGAN TIPE PESANAN
     public function checkout(Request $request)
     {
         $cart = session()->get('cart');
-        if(!$cart) {
+        if (!$cart) {
             return redirect('/keranjang')->with('error', 'Keranjang kosong!');
         }
 
-        // Ambil total akhir yang dikirim dari form (yang udah didiskon)
+        $tipe = $request->tipe_pesanan ?? 'dine_in';
+
+        // ✅ VALIDASI BERDASARKAN TIPE
+        if ($tipe == 'dine_in' && empty($request->no_meja)) {
+            return redirect()->back()->with('error', 'Pilih nomor meja untuk Dine-in!');
+        }
+        if ($tipe == 'takeaway' && empty($request->nama_customer)) {
+            return redirect()->back()->with('error', 'Isi nama customer untuk Takeaway!');
+        }
+
+        // ✅ GENERATE KODE PRE-ORDER OTOMATIS
+        $kodePreorder = null;
+        $namaCustomer = null;
+
+        if ($tipe == 'preorder') {
+            // Cari kode terakhir hari ini
+            $lastOrder = Pesanan::where('tipe_pesanan', 'preorder')
+                ->whereDate('created_at', today())
+                ->latest()
+                ->first();
+            
+            $nextNum = 1;
+            if ($lastOrder && $lastOrder->kode_preorder) {
+                // Ambil angka dari #001 → 1
+                $lastNum = (int) str_replace('#', '', $lastOrder->kode_preorder);
+                $nextNum = $lastNum + 1;
+            }
+            $kodePreorder = '#' . str_pad($nextNum, 3, '0', STR_PAD_LEFT);
+            $namaCustomer = 'Pre-Order ' . $kodePreorder;
+            
+        } elseif ($tipe == 'dine_in') {
+            $namaCustomer = $request->no_meja;
+            
+        } else { // takeaway
+            $namaCustomer = $request->nama_customer;
+        }
+
         $totalAkhirDiskon = $request->total_akhir_diskon ?? 0;
-        
         $waktu_sekarang = now();
         $id_referensi = null;
 
-        // [LOGIKA BARU YANG LEBIH KOKOH] 
-        // Hitung subtotal asli keranjang pake looping biasa yang lebih aman
         $subtotalAsli = 0;
-        foreach($cart as $item) {
+        foreach ($cart as $item) {
             $subtotalAsli += $item['price'] * $item['qty'];
         }
 
-        foreach($cart as $id => $details) {
-            $pesanan = new \App\Models\Pesanan();
-            $pesanan->nama_customer = $request->nama_customer;
+        foreach ($cart as $id => $details) {
+            $pesanan = new Pesanan();
+            
+            // ✅ DATA CUSTOMER
+            $pesanan->nama_customer = $namaCustomer;
+            $pesanan->tipe_pesanan = $tipe;
+            $pesanan->kode_preorder = $kodePreorder;
+            
             $pesanan->nama_produk = $details['name'];
             $pesanan->jumlah = $details['qty'];
             
-            // Rumus adil biar diskon dibagi rata per barang di database
+            // ✅ VARIANT
+            $pesanan->sugar_option = $details['sugar_option'] ?? 'Normal';
+            $pesanan->ice_option = $details['ice_option'] ?? 'Normal';
+            $pesanan->spicy_option = $details['spicy_option'] ?? 'Normal';
+            
+            // ✅ METODE PEMBAYARAN
+            $pesanan->metode_pembayaran = $request->metode_pembayaran ?? 'cash';
+            $pesanan->catatan = $request->catatan;
+
+            // Rumus diskon
             $hargaTotalBarangIni = $details['price'] * $details['qty'];
-            if($subtotalAsli > 0) {
-                // Berapa persen sih kontribusi harga barang ini ke total belanjaan?
+            if ($subtotalAsli > 0) {
                 $porsiDiskon = $hargaTotalBarangIni / $subtotalAsli;
-                // Kalikan persentase itu dengan total tagihan yang harus dibayar
                 $hargaSetelahDiskon = $totalAkhirDiskon * $porsiDiskon;
             } else {
                 $hargaSetelahDiskon = 0;
@@ -105,17 +170,16 @@ class CartController extends Controller
             $pesanan->created_at = $waktu_sekarang;
             $pesanan->save();
 
-            // Pengurangan stok di database
+            // Kurangi stok
             $produkDB = Produk::find($id);
-            if($produkDB) {
+            if ($produkDB) {
                 $produkDB->stok -= $details['qty'];
                 $produkDB->save();
             }
 
-            if(!$id_referensi) $id_referensi = $pesanan->id;
+            if (!$id_referensi) $id_referensi = $pesanan->id;
         }
 
-        // Bersihin keranjang dan voucher dari session setelah sukses bayar
         session()->forget('cart');
         session()->forget('voucher');
 
@@ -124,11 +188,10 @@ class CartController extends Controller
 
     public function update(Request $request)
     {
-        if($request->id && $request->quantity){
+        if ($request->id && $request->quantity) {
             $produk = Produk::find($request->id);
             $cart = session()->get('cart');
             
-            // [BARU] Keamanan form update keranjang
             if ($request->quantity > $produk->stok) {
                 return response()->json(['success' => false, 'message' => 'Stok tidak cukup']);
             }
@@ -141,32 +204,30 @@ class CartController extends Controller
 
     public function applyVoucher(Request $request)
     {
-    $kode = strtoupper($request->kode_voucher);
+        $kode = strtoupper($request->kode_voucher);
 
-    // Daftar voucher ghaib (bisa lu tambah sendiri kodenya di sini bro)
-    $daftar_voucher = [
-        'HAUSPUAS' => ['tipe' => 'potongan', 'nominal' => 10000],
-        'FARIZIILHAM' => ['tipe' => 'persen', 'nominal' => 10], // Diskon 10%
-        'AKHIRBULAN' => ['tipe' => 'potongan', 'nominal' => 5000],
-        'HAUSINAJA' => ['tipe' => 'persen', 'nominal' => 50]
-    ];
+        $daftar_voucher = [
+            'HAUSPUAS' => ['tipe' => 'potongan', 'nominal' => 10000],
+            'FARIZIILHAM' => ['tipe' => 'persen', 'nominal' => 10],
+            'AKHIRBULAN' => ['tipe' => 'potongan', 'nominal' => 5000],
+            'HAUSINAJA' => ['tipe' => 'persen', 'nominal' => 50]
+        ];
 
-    if (array_key_exists($kode, $daftar_voucher)) {
-        // Simpan data voucher ke session
-        session()->put('voucher', [
-            'kode' => $kode,
-            'tipe' => $daftar_voucher[$kode]['tipe'],
-            'nominal' => $daftar_voucher[$kode]['nominal']
-        ]);
-        return redirect()->back()->with('success', 'Voucher ' . $kode . ' berhasil dipasang!');
+        if (array_key_exists($kode, $daftar_voucher)) {
+            session()->put('voucher', [
+                'kode' => $kode,
+                'tipe' => $daftar_voucher[$kode]['tipe'],
+                'nominal' => $daftar_voucher[$kode]['nominal']
+            ]);
+            return redirect()->back()->with('success', 'Voucher ' . $kode . ' berhasil dipasang!');
+        }
+
+        return redirect()->back()->with('error', 'Kode voucher tidak valid bro!');
     }
-
-    return redirect()->back()->with('error', 'Kode voucher tidak valid bro!');
-}
 
     public function removeVoucher()
     {
-    session()->forget('voucher');
-    return redirect()->back()->with('success', 'Voucher berhasil dilepas.');
+        session()->forget('voucher');
+        return redirect()->back()->with('success', 'Voucher berhasil dilepas.');
     }
 }

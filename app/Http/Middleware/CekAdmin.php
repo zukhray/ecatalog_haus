@@ -6,14 +6,13 @@ use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-class CekLogin
+class CekAdmin
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (!session()->has('role')) {
-            return redirect('/login')->with('error_admin', 'Lu harus login dulu bro!');
+        if (session('role') !== 'admin') {
+            return redirect('/')->with('error', 'Akses ditolak! Hanya admin yang bisa masuk.');
         }
-
         return $next($request);
     }
 }
